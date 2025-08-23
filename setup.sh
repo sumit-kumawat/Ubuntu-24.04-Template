@@ -1,6 +1,7 @@
 #!/bin/bash
 # ============================================
 # Ubuntu 24.04 Production Template Setup Script
+# With Progress Tracing
 # ============================================
 
 set -e
@@ -10,53 +11,56 @@ USER="rdsroot"
 SUDOERS_FILE="/etc/sudoers.d/${USER}"
 NETPLAN_FILE="/etc/netplan/00-installer-config.yaml"
 
+# --- FUNCTION for progress ---
+progress() {
+    PERCENT=$1
+    MESSAGE=$2
+    echo "[ ${PERCENT}% ] ${MESSAGE}"
+}
+
 # --- 1. Create superuser with root privileges ---
+progress 10 "Creating superuser..."
 if ! id -u $USER >/dev/null 2>&1; then
-    echo "Creating user $USER..."
     adduser --disabled-password --gecos "" $USER
 fi
-
 usermod -aG sudo $USER
-echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee $SUDOERS_FILE
+echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee $SUDOERS_FILE >/dev/null
 chmod 440 $SUDOERS_FILE
-echo "User $USER now has root privileges without password prompt."
 
 # --- 2. Install and enable SSH server ---
-echo "Installing OpenSSH server..."
-apt update -y
-apt install -y openssh-server
+progress 20 "Installing SSH server..."
+apt update -y >/dev/null 2>&1
+apt install -y openssh-server >/dev/null 2>&1
 systemctl enable ssh
 systemctl start ssh
-echo "SSH server is installed and running."
 
 # --- 3. Install VMware Tools ---
-echo "Installing Open VM Tools..."
-apt install -y open-vm-tools open-vm-tools-desktop
+progress 40 "Installing VMware Tools..."
+apt install -y open-vm-tools open-vm-tools-desktop >/dev/null 2>&1
 systemctl enable vmtoolsd
 systemctl start vmtoolsd
-echo "VMware tools installed."
 
 # --- 4. Update system and install essential packages ---
-echo "Updating system and installing essential packages..."
-apt update -y && apt upgrade -y
+progress 60 "Updating system & installing essential packages..."
+apt update -y >/dev/null 2>&1 && apt upgrade -y >/dev/null 2>&1
 apt install -y \
     curl wget git unzip zip htop net-tools \
     software-properties-common build-essential \
     apt-transport-https ca-certificates \
     gnupg lsb-release \
-    iftop nmap tcpdump ufw unattended-upgrades
+    iftop nmap tcpdump ufw unattended-upgrades \
+    lvm2 >/dev/null 2>&1
 
 # --- 5. Configure automatic updates ---
-dpkg-reconfigure --priority=low unattended-upgrades
+dpkg-reconfigure --priority=low unattended-upgrades >/dev/null 2>&1
 
 # --- 6. Configure firewall ---
-ufw allow ssh
-ufw --force enable
-echo "Firewall configured to allow SSH."
+progress 75 "Configuring firewall & DHCP network..."
+ufw allow ssh >/dev/null 2>&1
+ufw --force enable >/dev/null 2>&1
 
-# --- 7. Configure DHCP network ---
+# Configure DHCP
 if [ -f $NETPLAN_FILE ]; then
-    echo "Configuring DHCP for network..."
     cat <<EOF > $NETPLAN_FILE
 network:
   version: 2
@@ -65,17 +69,36 @@ network:
     ens33:
       dhcp4: true
 EOF
-    netplan apply
-    echo "DHCP network applied."
+    netplan apply >/dev/null 2>&1
 fi
 
-# --- 8. Set timezone to UTC ---
-timedatectl set-timezone UTC
-echo "Timezone set to UTC."
+# --- 7. Set timezone ---
+timedatectl set-timezone UTC >/dev/null 2>&1
 
-# --- 9. Cleanup for template ---
-apt autoremove -y
-apt clean
+# --- 8. Disable IPv6 ---
+progress 85 "Disabling IPv6..."
+cat <<EOF > /etc/sysctl.d/99-disable-ipv6.conf
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
+EOF
+sysctl -p /etc/sysctl.d/99-disable-ipv6.conf >/dev/null 2>&1
 
-echo "Ubuntu 24.04 production template setup completed!"
+sed -i 's/GRUB_CMDLINE_LINUX="[^"]*/& ipv6.disable=1/' /etc/default/grub
+update-grub >/dev/null 2>&1
+
+# --- 9. Cleanup ---
+progress 95 "Cleaning up..."
+apt autoremove -y >/dev/null 2>&1
+apt clean >/dev/null 2>&1
+
+# --- 10. Completion ---
+progress 100 "Ubuntu 24.04 production template setup completed! 🚀"
 echo "Reboot recommended: sudo reboot"
+
+# --- Show VGS if available ---
+if command -v vgs >/dev/null 2>&1; then
+    echo ""
+    echo "📊 LVM Volume Groups:"
+    vgs || echo "No volume groups found."
+fi
