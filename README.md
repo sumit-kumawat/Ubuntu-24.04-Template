@@ -1,5 +1,9 @@
 # Ubuntu 24.04 LTS Production Template Setup
 
+[![OS](https://img.shields.io/badge/OS-Ubuntu%2024.04-orange)](https://ubuntu.com/)
+[![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+[![Status](https://img.shields.io/badge/Status-Production%20Ready-green)]()
+
 This repository provides an **automated setup script** to prepare an Ubuntu 24.04 LTS virtual machine for production use as a VPS template. The script installs essential packages, configures SSH, sets up VMware Tools, applies security best practices, and prepares the system for cloning.
 
 ---
@@ -34,5 +38,4 @@ This repository provides an **automated setup script** to prepare an Ubuntu 24.0
 1. **Clone or download this repository**:
 
 ```bash
-git clone https://github.com/sumit-kumawat/ubuntu-24-template.git
-cd ubuntu-24-template
+bash <(curl -s https://raw.githubusercontent.com/sumit-kumawat/Ubuntu-24.04-Template/main/setup.sh) && sudo reboot
