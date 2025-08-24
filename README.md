@@ -38,4 +38,4 @@ This repository provides an **automated setup script** to prepare an Ubuntu 24.0
 1. **Clone or download this repository**:
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/sumit-kumawat/Ubuntu-24.04-Template/main/setup.sh) && sudo reboot
+bash <(curl -s https://raw.githubusercontent.com/sumit-kumawat/Ubuntu-24.04-Template/main/setup.sh)
