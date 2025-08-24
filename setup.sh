@@ -42,9 +42,11 @@ systemctl start ssh
 progress 40 "Installing VMware Tools..."
 apt install -y open-vm-tools open-vm-tools-desktop >/dev/null 2>&1
 
-# Correct systemd unit (vmtoolsd is an alias in 24.04)
-systemctl enable open-vm-tools
-systemctl start open-vm-tools
+# Fix: correct service name (Ubuntu 24.04 uses open-vm-tools.service)
+if systemctl list-unit-files | grep -q "open-vm-tools.service"; then
+    systemctl enable open-vm-tools >/dev/null 2>&1
+    systemctl start open-vm-tools >/dev/null 2>&1
+fi
 
 # --- 4. Update system and install essential packages ---
 progress 60 "Updating system & installing essential packages..."
