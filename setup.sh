@@ -19,13 +19,17 @@ progress() {
 }
 
 # --- 1. Create superuser with root privileges ---
-progress 10 "Creating superuser..."
-if ! id -u $USER >/dev/null 2>&1; then
-    adduser --disabled-password --gecos "" $USER
+progress 10 "Checking superuser..."
+if [ "$USER" != "root" ]; then
+    if ! id -u $USER >/dev/null 2>&1; then
+        adduser --disabled-password --gecos "" $USER
+    fi
+    usermod -aG sudo $USER || true
+    echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee $SUDOERS_FILE >/dev/null
+    chmod 440 $SUDOERS_FILE
+else
+    echo "Already running as root user, skipping user creation..."
 fi
-usermod -aG sudo $USER
-echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee $SUDOERS_FILE >/dev/null
-chmod 440 $SUDOERS_FILE
 
 # --- 2. Install and enable SSH server ---
 progress 20 "Installing SSH server..."
