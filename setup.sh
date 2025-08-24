@@ -42,10 +42,12 @@ systemctl start ssh
 progress 40 "Installing VMware Tools..."
 apt install -y open-vm-tools open-vm-tools-desktop >/dev/null 2>&1
 
-# Fix: correct service name (Ubuntu 24.04 uses open-vm-tools.service)
+# Fix for Ubuntu 24.04: use the correct service name
 if systemctl list-unit-files | grep -q "open-vm-tools.service"; then
     systemctl enable open-vm-tools >/dev/null 2>&1
     systemctl start open-vm-tools >/dev/null 2>&1
+else
+    echo "⚠️ open-vm-tools.service not found, skipping enable/start."
 fi
 
 # --- 4. Update system and install essential packages ---
