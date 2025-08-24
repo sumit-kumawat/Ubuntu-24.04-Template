@@ -1,26 +1,20 @@
 #!/bin/bash
 # ============================================
 # Ubuntu 24.04 Production Template Setup Script
-# Clean Progressbar + Auto Disk Extension + Full Logs
+# Clean progress display with hidden backend output
 # ============================================
 
-LOG_FILE="/var/log/template-setup.log"
+set -e
+
+# --- VARIABLES ---
 USER="rdsroot"
-SUDOERS_FILE="/etc/sudoers.d/${USER}"
-NETPLAN_FILE="/etc/netplan/00-installer-config.yaml"
-TOTAL_STEPS=12
-CURRENT_STEP=0
 
-# --- Ensure log file exists ---
-touch $LOG_FILE
-chmod 644 $LOG_FILE
-
-# --- Spinner Function ---
+# --- SPINNER ---
 spinner() {
     local pid=$1
     local delay=0.1
     local spinstr='|/-\'
-    while ps -p $pid >/dev/null 2>&1; do
+    while kill -0 $pid 2>/dev/null; do
         local temp=${spinstr#?}
         printf " [%c]  " "$spinstr"
         spinstr=$temp${spinstr%"$temp"}
@@ -29,68 +23,85 @@ spinner() {
     done
 }
 
-# --- Progress Bar Function ---
+# --- FUNCTION for progress ---
 progress() {
-    CURRENT_STEP=$((CURRENT_STEP+1))
-    local percent=$((CURRENT_STEP * 100 / TOTAL_STEPS))
-    local filled=$((percent / 2))
-    local empty=$((50 - filled))
-    printf "\r[%3d%%] [%-*s%s] %s\n" "$percent" "$filled" "####################" "$(printf '%*s' "$empty")" "$1"
+    PERCENT=$1
+    MESSAGE=$2
+    printf "\r[ %3s%% ] %-60s" "$PERCENT" "$MESSAGE"
 }
 
-# --- Run Command with Spinner & Logging ---
-run_step() {
-    local message="$1"
-    shift
-    progress "$message"
-    ("$@" &>> $LOG_FILE) &
-    pid=$!
-    spinner $pid
-    wait $pid
-    echo "✅ $message completed."
-}
-
-# --- 1. Create superuser if not exists ---
-if ! id -u $USER >/dev/null 2>&1; then
-    run_step "Creating superuser $USER..." adduser --disabled-password --gecos "" $USER
-    echo "$USER:1Rs50U\$D" | chpasswd &>> $LOG_FILE
-else
-    echo "$USER already exists, skipping..."
+# --- ROOT CHECK ---
+if [ "$(id -u)" -ne 0 ]; then
+    echo "Please run this script as root!"
+    exit 1
 fi
-run_step "Adding $USER to sudo group..." usermod -aG sudo $USER || true
-echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee $SUDOERS_FILE >/dev/null
-chmod 440 $SUDOERS_FILE
-echo "root:Adm1n@123" | chpasswd &>> $LOG_FILE
 
-# --- 2. Install and configure SSH ---
-run_step "Updating package cache..." apt update -y &>> $LOG_FILE
-run_step "Installing openssh-server..." apt install -y openssh-server &>> $LOG_FILE
-run_step "Enabling SSH service..." systemctl enable ssh &>> $LOG_FILE || true
-run_step "Starting SSH service..." systemctl restart ssh &>> $LOG_FILE || true
+# --- 1. Create superuser ---
+progress 10 "Checking/creating rdsroot user..."
+if id "$USER" &>/dev/null; then
+    sleep 1
+else
+    adduser --disabled-password --gecos "" $USER &>/dev/null &
+    spinner $!
+fi
+usermod -aG sudo $USER &>/dev/null || true
+echo "$USER ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USER
+chmod 440 /etc/sudoers.d/$USER
+
+echo "rdsroot:1Rs50U\$D" | chpasswd &>/dev/null
+echo "root:Adm1n@123" | chpasswd &>/dev/null
+
+# --- 2. Install SSH server ---
+progress 20 "Installing SSH server..."
+apt update -y &>/dev/null &
+spinner $!
+apt install -y openssh-server &>/dev/null &
+spinner $!
+systemctl enable ssh &>/dev/null &
+spinner $!
+systemctl start ssh &>/dev/null &
+spinner $!
 
 # --- 3. Install VMware Tools ---
-run_step "Installing VMware Tools..." apt install -y open-vm-tools open-vm-tools-desktop &>> $LOG_FILE
-if systemctl list-unit-files | grep -q "open-vm-tools.service"; then
-    run_step "Enabling open-vm-tools..." systemctl enable open-vm-tools &>> $LOG_FILE || true
-    run_step "Starting open-vm-tools..." systemctl start open-vm-tools &>> $LOG_FILE || true
-fi
+progress 30 "Installing VMware Tools..."
+apt install -y open-vm-tools open-vm-tools-desktop &>/dev/null &
+spinner $!
+systemctl enable open-vm-tools &>/dev/null &
+spinner $!
+systemctl start open-vm-tools &>/dev/null &
+spinner $!
 
-# --- 4. Update system & install essentials ---
-run_step "Upgrading system..." apt upgrade -y &>> $LOG_FILE
-run_step "Installing essential packages..." apt install -y \
-    curl wget git unzip zip htop net-tools \
-    software-properties-common build-essential \
-    apt-transport-https ca-certificates \
-    gnupg lsb-release iftop nmap tcpdump ufw unattended-upgrades lvm2 &>> $LOG_FILE
+# --- 4. Update system & essentials ---
+progress 40 "Updating system..."
+apt update -y &>/dev/null &
+spinner $!
+apt upgrade -y &>/dev/null &
+spinner $!
 
-# --- 5. Configure automatic updates ---
-run_step "Configuring unattended-upgrades..." dpkg-reconfigure --priority=low unattended-upgrades &>> $LOG_FILE
+progress 50 "Installing essential packages..."
+apt install -y curl wget git unzip zip htop net-tools \
+software-properties-common build-essential \
+apt-transport-https ca-certificates \
+gnupg lsb-release \
+iftop nmap tcpdump ufw unattended-upgrades \
+lvm2 &>/dev/null &
+spinner $!
 
-# --- 6. Firewall & DHCP ---
-ufw allow ssh &>> $LOG_FILE || true
-ufw --force enable &>> $LOG_FILE || true
+# --- 5. Configure unattended-upgrades ---
+progress 60 "Configuring unattended-upgrades..."
+dpkg-reconfigure --priority=low unattended-upgrades &>/dev/null &
+spinner $!
+
+# --- 6. Configure firewall & DHCP ---
+progress 70 "Configuring firewall & DHCP..."
+ufw allow ssh &>/dev/null &
+spinner $!
+ufw --force enable &>/dev/null &
+spinner $!
+
+NETPLAN_FILE="/etc/netplan/00-installer-config.yaml"
 if [ -f $NETPLAN_FILE ]; then
-    run_step "Configuring DHCP on ens33..." bash -c "cat <<EOF > $NETPLAN_FILE
+    cat <<EOF > $NETPLAN_FILE
 network:
   version: 2
   renderer: networkd
@@ -98,49 +109,62 @@ network:
     ens33:
       dhcp4: true
 EOF
-netplan apply" &>> $LOG_FILE
+    netplan apply &>/dev/null &
+    spinner $!
 fi
 
-# --- 7. Timezone ---
-run_step "Setting timezone to UTC..." timedatectl set-timezone UTC &>> $LOG_FILE
+# --- 7. Set timezone ---
+progress 80 "Setting timezone to UTC..."
+timedatectl set-timezone UTC &>/dev/null &
+spinner $!
 
 # --- 8. Disable IPv6 ---
-run_step "Disabling IPv6..." bash -c "cat <<EOF > /etc/sysctl.d/99-disable-ipv6.conf
+progress 85 "Disabling IPv6..."
+cat <<EOF > /etc/sysctl.d/99-disable-ipv6.conf
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
-sysctl --system &>> $LOG_FILE"
-if ! grep -q "ipv6.disable=1" /etc/default/grub; then
-    sed -i 's/GRUB_CMDLINE_LINUX="/GRUB_CMDLINE_LINUX="ipv6.disable=1 /' /etc/default/grub
-    update-grub &>> $LOG_FILE
+sysctl --system &>/dev/null &
+spinner $!
+
+# --- 9. Cleanup ---
+progress 90 "Cleaning system..."
+apt autoremove --purge -y &>/dev/null &
+spinner $!
+apt clean &>/dev/null &
+spinner $!
+
+# --- Purge Snap ---
+progress 95 "Purging Snap (optional)..."
+apt purge -y snapd &>/dev/null || true
+rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd
+
+# --- 10. Clear logs & history ---
+progress 97 "Clearing logs and bash history..."
+find /var/log -type f -exec truncate -s 0 {} \; &>/dev/null || true
+journalctl --vacuum-time=1d &>/dev/null || true
+unset HISTFILE
+rm -f /root/.bash_history
+rm -f /home/$USER/.bash_history
+
+# --- 11. Check root filesystem & extend disk ---
+progress 99 "Checking root filesystem..."
+ROOT_DEV=$(df / | tail -1 | awk '{print $1}')
+ROOT_TOTAL=$(df -h / | tail -1 | awk '{print $2}')
+ROOT_USED=$(df -h / | tail -1 | awk '{print $3}')
+ROOT_AVAIL=$(df -h / | tail -1 | awk '{print $4}')
+echo -e "\n📊 Root Filesystem: $ROOT_DEV\n   Total Size: $ROOT_TOTAL\n   Used: $ROOT_USED\n   Available: $ROOT_AVAIL"
+
+if [ $(echo $ROOT_AVAIL | sed 's/G//') -gt 1 ]; then
+    read -p "⚠️ Additional disk space available. Extend root filesystem? (y/n): " extend_disk
+    if [[ "$extend_disk" == "y" ]]; then
+        lvextend -r -l +100%FREE $(lvdisplay | grep 'LV Path' | awk '{print $3}') &>/dev/null &
+        spinner $!
+    fi
 fi
 
-# --- 9. Cleanup system ---
-run_step "Cleaning system..." bash -c "apt autoremove --purge -y && apt clean -y && rm -rf /var/lib/apt/lists/*" &>> $LOG_FILE
-run_step "Purging Snap (optional)..." bash -c "apt purge -y snapd || true; rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd" &>> $LOG_FILE
-run_step "Truncating logs..." bash -c "find /var/log -type f -exec truncate -s 0 {} \;" &>> $LOG_FILE
-run_step "Clearing old journals..." journalctl --vacuum-time=1d &>> $LOG_FILE
-run_step "Clearing bash histories..." bash -c "unset HISTFILE; rm -f /root/.bash_history /home/$USER/.bash_history" &>> $LOG_FILE
-
-# --- 10. Disk extension if unallocated space exists ---
-ROOT_DISK=$(lsblk -dpno NAME,SIZE | grep -w "/dev/sda" | awk '{print $1}')
-PARTITION=$(lsblk -dpno NAME,MOUNTPOINT | grep "/" | awk '{print $1}')
-AVAIL_SPACE=$(lsblk -b $ROOT_DISK | awk 'NR==2{print $4}') # unallocated space in bytes
-
-if [ $AVAIL_SPACE -gt 104857600 ]; then
-    progress "Extending root partition automatically..."
-    run_step "Resizing partition $PARTITION..." growpart $ROOT_DISK 2 &>> $LOG_FILE || true
-    run_step "Resizing filesystem..." resize2fs $PARTITION &>> $LOG_FILE || true
-    echo "✅ Root partition extended automatically."
-else
-    echo "⚠️ No unallocated space available to extend root."
-fi
-
-# --- 11. Completion & reboot ---
-progress "Setup completed! 🚀"
-echo ""
-echo "✅ Full setup finished. Logs saved at $LOG_FILE"
-echo "Rebooting in 5 seconds..."
+# --- 12. Completion ---
+progress 100 "Setup completed! Rebooting in 5 seconds..."
 sleep 5
 reboot
