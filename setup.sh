@@ -38,11 +38,13 @@ apt install -y openssh-server >/dev/null 2>&1
 systemctl enable ssh
 systemctl start ssh
 
-# --- 3. Install VMware Tools (CLI only) ---
+# --- 3. Install VMware Tools ---
 progress 40 "Installing VMware Tools..."
-apt install -y open-vm-tools >/dev/null 2>&1
-systemctl enable vmtoolsd
-systemctl start vmtoolsd
+apt install -y open-vm-tools open-vm-tools-desktop >/dev/null 2>&1
+
+# Correct systemd unit (vmtoolsd is an alias in 24.04)
+systemctl enable open-vm-tools
+systemctl start open-vm-tools
 
 # --- 4. Update system and install essential packages ---
 progress 60 "Updating system & installing essential packages..."
