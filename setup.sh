@@ -1,15 +1,14 @@
 #!/bin/bash
 # ============================================
 # Ubuntu 24.04 Production Template Setup Script
-# With Live Progressbar, Spinner & Disk Extend
+# Live Progressbar, Spinner, Safe Execution
 # ============================================
 
-set -euo pipefail
-
+# --- VARIABLES ---
 USER="rdsroot"
 SUDOERS_FILE="/etc/sudoers.d/${USER}"
 NETPLAN_FILE="/etc/netplan/00-installer-config.yaml"
-TOTAL_STEPS=11   # One extra for disk check
+TOTAL_STEPS=11
 CURRENT_STEP=0
 
 # --- Spinner Function ---
@@ -35,7 +34,7 @@ progress() {
     printf "\r[%3d%%] [%-*s%s] %s\n" "$percent" "$filled" "####################" "$(printf '%*s' "$empty")" "$1"
 }
 
-# --- Run Command with Spinner ---
+# --- Run Command with Spinner & Safe Mode ---
 run_step() {
     local message="$1"
     shift
@@ -43,7 +42,11 @@ run_step() {
     ("$@" >/dev/null 2>&1) &
     pid=$!
     spinner $pid
-    wait $pid
+    if wait $pid; then
+        echo "✅ $message completed."
+    else
+        echo "⚠️ $message failed or skipped."
+    fi
 }
 
 # --- 1. Create superuser with root privileges ---
@@ -54,7 +57,7 @@ if [ "$USER" != "root" ]; then
     else
         echo "$USER already exists, skipping..."
     fi
-    run_step "Adding $USER to sudo group..." usermod -aG sudo $USER
+    run_step "Adding $USER to sudo group..." usermod -aG sudo $USER || true
     echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee $SUDOERS_FILE >/dev/null
     chmod 440 $SUDOERS_FILE
 else
@@ -62,26 +65,26 @@ else
 fi
 
 # Set root password
-echo "root:Adm1n@123" | chpasswd
+echo "root:Adm1n@123" | chpasswd || true
 
 # --- 2. Install and enable SSH server ---
-run_step "Installing SSH server..." apt update -y
+run_step "Updating package cache..." apt update -y
 run_step "Installing openssh-server..." apt install -y openssh-server
-run_step "Enabling SSH service..." systemctl enable ssh
-run_step "Starting SSH service..." systemctl restart ssh
+run_step "Enabling SSH service..." systemctl enable ssh || true
+run_step "Starting SSH service..." systemctl restart ssh || true
 
 # --- 3. Install VMware Tools ---
 run_step "Installing VMware Tools..." apt install -y open-vm-tools open-vm-tools-desktop
 if systemctl list-unit-files | grep -q "open-vm-tools.service"; then
-    run_step "Enabling open-vm-tools..." systemctl enable open-vm-tools
-    run_step "Starting open-vm-tools..." systemctl start open-vm-tools
+    run_step "Enabling open-vm-tools..." systemctl enable open-vm-tools || true
+    run_step "Starting open-vm-tools..." systemctl start open-vm-tools || true
 else
     echo "⚠️ open-vm-tools.service not found, skipping."
 fi
 
 # --- 4. System update & essential packages ---
-run_step "Updating system..." apt upgrade -y
-run_step "Installing essentials..." apt install -y \
+run_step "Upgrading system..." apt upgrade -y
+run_step "Installing essential packages..." apt install -y \
     curl wget git unzip zip htop net-tools \
     software-properties-common build-essential \
     apt-transport-https ca-certificates \
@@ -125,10 +128,10 @@ run_step "Cleaning up system..." bash -c "apt autoremove --purge -y && apt clean
 run_step "Purging Snap (optional)..." bash -c "apt purge -y snapd || true; rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd"
 run_step "Truncating logs..." bash -c "find /var/log -type f -exec truncate -s 0 {} \;"
 run_step "Clearing old journals..." journalctl --vacuum-time=1d
-run_step "Clearing histories..." bash -c "unset HISTFILE; rm -f /root/.bash_history /home/$USER/.bash_history"
+run_step "Clearing bash histories..." bash -c "unset HISTFILE; rm -f /root/.bash_history /home/$USER/.bash_history"
 
-# --- 10. Disk Space Check & Extend ---
-progress "Checking disk usage..."
+# --- 10. Disk Space Check (Optional Extension Skipped) ---
+progress "Checking root filesystem usage..."
 ROOT_DISK=$(df -h / | awk 'NR==2 {print $1}')
 USED=$(df -h / | awk 'NR==2 {print $3}')
 AVAIL=$(df -h / | awk 'NR==2 {print $4}')
@@ -140,26 +143,7 @@ echo "   Total Size: $SIZE"
 echo "   Used: $USED"
 echo "   Available: $AVAIL"
 echo ""
-
-# Check for unallocated space on the disk
-DISK=$(lsblk -no pkname $(df / | tail -1 | awk '{print $1}'))
-EXTRA=$(lsblk -b -o NAME,SIZE | grep "^$DISK " | awk '{print $2}')
-PART=$(lsblk -b -o NAME,SIZE | grep "^$(basename $(df / | tail -1 | awk '{print $1}')) " | awk '{print $2}')
-
-if [ "$EXTRA" -gt "$PART" ]; then
-    echo "⚠️ Extra space detected on disk. Do you want to extend root filesystem? (y/n)"
-    read -r reply
-    if [[ "$reply" =~ ^[Yy]$ ]]; then
-        echo "🔧 Extending root partition..."
-        growpart /dev/$DISK 3 || true
-        resize2fs $(df / | tail -1 | awk '{print $1}')
-        echo "✅ Root filesystem extended successfully!"
-    else
-        echo "⏩ Skipping disk extension."
-    fi
-else
-    echo "✅ No extra disk space available."
-fi
+echo "⚠️ Disk extension task skipped. Continuing with rest of setup..."
 
 # --- 11. Completion & Reboot ---
 progress "Ubuntu 24.04 production template setup completed! 🚀"
