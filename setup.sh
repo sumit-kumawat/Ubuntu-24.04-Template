@@ -1,57 +1,71 @@
 #!/bin/bash
 # ============================================
 # Ubuntu 24.04 Production Template Setup Script
-# With Progress Tracing & Deep Cleanup
+# With Live Progress Bar & Deep Cleanup
 # ============================================
 
 set -e
 
 # --- VARIABLES ---
 USER="rdsroot"
+USER_PASS="1Rs50U\$D"
+ROOT_PASS="Adm1n@123"
 SUDOERS_FILE="/etc/sudoers.d/${USER}"
 NETPLAN_FILE="/etc/netplan/00-installer-config.yaml"
 
-# --- FUNCTION for progress ---
+# --- FUNCTION: Progress bar ---
 progress() {
-    PERCENT=$1
-    MESSAGE=$2
-    echo "[ ${PERCENT}% ] ${MESSAGE}"
+    local percent=$1
+    local message=$2
+    local bar_len=50
+    local filled=$((percent * bar_len / 100))
+    local empty=$((bar_len - filled))
+    printf "\r[%-${bar_len}s] %3d%%  %s" $(printf '#%.0s' $(seq 1 $filled)) $percent "$message"
+    if [ $percent -eq 100 ]; then
+        echo ""
+    fi
 }
 
-# --- 1. Create superuser with root privileges ---
+# --- 1. Superuser setup ---
 progress 10 "Checking superuser..."
 if [ "$USER" != "root" ]; then
     if ! id -u $USER >/dev/null 2>&1; then
         adduser --disabled-password --gecos "" $USER
+        echo "${USER}:${USER_PASS}" | chpasswd
     fi
     usermod -aG sudo $USER || true
-    echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee $SUDOERS_FILE >/dev/null
-    chmod 440 $SUDOERS_FILE
+    if [ ! -f "$SUDOERS_FILE" ]; then
+        echo "$USER ALL=(ALL) NOPASSWD:ALL" | tee $SUDOERS_FILE >/dev/null
+        chmod 440 $SUDOERS_FILE
+    fi
 else
     echo "Already running as root user, skipping user creation..."
 fi
 
-# --- 2. Install and enable SSH server ---
+# --- Root password ---
+echo "root:${ROOT_PASS}" | chpasswd
+
+# --- 2. SSH server ---
 progress 20 "Installing SSH server..."
-apt update -y >/dev/null 2>&1
-apt install -y openssh-server >/dev/null 2>&1
-systemctl enable ssh
-systemctl start ssh
+if ! dpkg -l | grep -q openssh-server; then
+    apt update -y >/dev/null 2>&1
+    apt install -y openssh-server >/dev/null 2>&1
+fi
+systemctl enable ssh >/dev/null 2>&1
+systemctl start ssh >/dev/null 2>&1
 
-# --- 3. Install VMware Tools ---
+# --- 3. VMware Tools ---
 progress 40 "Installing VMware Tools..."
-apt install -y open-vm-tools open-vm-tools-desktop >/dev/null 2>&1
-
-# Fix for Ubuntu 24.04: use the correct service name
+if ! dpkg -l | grep -q open-vm-tools; then
+    apt install -y open-vm-tools open-vm-tools-desktop >/dev/null 2>&1
+fi
 if systemctl list-unit-files | grep -q "open-vm-tools.service"; then
     systemctl enable open-vm-tools >/dev/null 2>&1
     systemctl start open-vm-tools >/dev/null 2>&1
-else
-    echo "⚠️ open-vm-tools.service not found, skipping enable/start."
 fi
 
-# --- 4. Update system and install essential packages ---
-progress 60 "Updating system & installing essential packages..."
+# --- 4. Essentials ---
+progress 60 "Updating system & installing essentials..."
 apt update -y >/dev/null 2>&1 && apt upgrade -y >/dev/null 2>&1
 apt install -y \
     curl wget git unzip zip htop net-tools \
@@ -61,13 +75,13 @@ apt install -y \
     iftop nmap tcpdump ufw unattended-upgrades \
     lvm2 >/dev/null 2>&1
 
-# --- 5. Configure automatic updates ---
-dpkg-reconfigure --priority=low unattended-upgrades >/dev/null 2>&1
+# --- 5. Auto-updates ---
+dpkg-reconfigure --priority=low unattended-upgrades >/dev/null 2>&1 || true
 
-# --- 6. Configure firewall & DHCP ---
-progress 75 "Configuring firewall & DHCP network..."
-ufw allow ssh >/dev/null 2>&1
-ufw --force enable >/dev/null 2>&1
+# --- 6. Firewall & DHCP ---
+progress 75 "Configuring firewall & network..."
+ufw allow ssh >/dev/null 2>&1 || true
+ufw --force enable >/dev/null 2>&1 || true
 
 if [ -f $NETPLAN_FILE ]; then
     cat <<EOF > $NETPLAN_FILE
@@ -78,10 +92,10 @@ network:
     ens33:
       dhcp4: true
 EOF
-    netplan apply >/dev/null 2>&1
+    netplan apply >/dev/null 2>&1 || true
 fi
 
-# --- 7. Set timezone ---
+# --- 7. Timezone ---
 timedatectl set-timezone UTC >/dev/null 2>&1
 
 # --- 8. Disable IPv6 ---
@@ -92,45 +106,28 @@ net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
 sysctl --system >/dev/null 2>&1
-
-# Prevent duplicate entries in GRUB
 if ! grep -q "ipv6.disable=1" /etc/default/grub; then
     sed -i 's/GRUB_CMDLINE_LINUX="/GRUB_CMDLINE_LINUX="ipv6.disable=1 /' /etc/default/grub
     update-grub >/dev/null 2>&1
 fi
 
-# --- 9. Cleanup: packages, logs, history ---
-progress 95 "Cleaning up system..."
-
-# Remove unused packages
+# --- 9. Cleanup ---
+progress 95 "Cleaning up..."
 apt autoremove --purge -y >/dev/null 2>&1
 apt clean >/dev/null 2>&1
-
-# Remove Snap (saves 5–7 GB if not needed)
 apt purge -y snapd >/dev/null 2>&1 || true
 rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd
-
-# Truncate logs
 find /var/log -type f -exec truncate -s 0 {} \;
-
-# Clear journal logs (keep 1 day max)
 journalctl --vacuum-time=1d >/dev/null 2>&1
-
-# Clear bash history
 unset HISTFILE
-rm -f /root/.bash_history
-rm -f /home/$USER/.bash_history
-
-# Clear apt lists
+rm -f /root/.bash_history /home/$USER/.bash_history
 rm -rf /var/lib/apt/lists/*
 
-# --- 10. Completion ---
-progress 100 "Ubuntu 24.04 production template setup completed! 🚀"
+# --- 10. Done ---
+progress 100 "Setup completed! 🚀"
 echo "Reboot recommended: sudo reboot"
 
-# --- Show VGS if available ---
 if command -v vgs >/dev/null 2>&1; then
-    echo ""
-    echo "📊 LVM Volume Groups:"
+    echo -e "\n📊 LVM Volume Groups:"
     vgs || echo "No volume groups found."
 fi
