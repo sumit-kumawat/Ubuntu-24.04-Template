@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
 # Ubuntu 24.04 Production Template Setup Script
-# With Progress Tracing
+# With Progress Tracing & Deep Cleanup
 # ============================================
 
 set -e
@@ -34,9 +34,9 @@ apt install -y openssh-server >/dev/null 2>&1
 systemctl enable ssh
 systemctl start ssh
 
-# --- 3. Install VMware Tools ---
+# --- 3. Install VMware Tools (CLI only) ---
 progress 40 "Installing VMware Tools..."
-apt install -y open-vm-tools open-vm-tools-desktop >/dev/null 2>&1
+apt install -y open-vm-tools >/dev/null 2>&1
 systemctl enable vmtoolsd
 systemctl start vmtoolsd
 
@@ -54,12 +54,11 @@ apt install -y \
 # --- 5. Configure automatic updates ---
 dpkg-reconfigure --priority=low unattended-upgrades >/dev/null 2>&1
 
-# --- 6. Configure firewall ---
+# --- 6. Configure firewall & DHCP ---
 progress 75 "Configuring firewall & DHCP network..."
 ufw allow ssh >/dev/null 2>&1
 ufw --force enable >/dev/null 2>&1
 
-# Configure DHCP
 if [ -f $NETPLAN_FILE ]; then
     cat <<EOF > $NETPLAN_FILE
 network:
@@ -82,15 +81,38 @@ net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
 net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
-sysctl -p /etc/sysctl.d/99-disable-ipv6.conf >/dev/null 2>&1
+sysctl --system >/dev/null 2>&1
 
-sed -i 's/GRUB_CMDLINE_LINUX="[^"]*/& ipv6.disable=1/' /etc/default/grub
-update-grub >/dev/null 2>&1
+# Prevent duplicate entries in GRUB
+if ! grep -q "ipv6.disable=1" /etc/default/grub; then
+    sed -i 's/GRUB_CMDLINE_LINUX="/GRUB_CMDLINE_LINUX="ipv6.disable=1 /' /etc/default/grub
+    update-grub >/dev/null 2>&1
+fi
 
-# --- 9. Cleanup ---
-progress 95 "Cleaning up..."
-apt autoremove -y >/dev/null 2>&1
+# --- 9. Cleanup: packages, logs, history ---
+progress 95 "Cleaning up system..."
+
+# Remove unused packages
+apt autoremove --purge -y >/dev/null 2>&1
 apt clean >/dev/null 2>&1
+
+# Remove Snap (saves 5–7 GB if not needed)
+apt purge -y snapd >/dev/null 2>&1 || true
+rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd
+
+# Truncate logs
+find /var/log -type f -exec truncate -s 0 {} \;
+
+# Clear journal logs (keep 1 day max)
+journalctl --vacuum-time=1d >/dev/null 2>&1
+
+# Clear bash history
+unset HISTFILE
+rm -f /root/.bash_history
+rm -f /home/$USER/.bash_history
+
+# Clear apt lists
+rm -rf /var/lib/apt/lists/*
 
 # --- 10. Completion ---
 progress 100 "Ubuntu 24.04 production template setup completed! 🚀"
